@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "krishi-karyastan"
+version = "0.1.0"
+description = "Smart Farming Cooperative: Precision Agriculture & Distributed Sensing Multi-Agent System"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Manas Viswajith", email = "108781322+totallynotmanas@users.noreply.github.com" }
+]
+keywords = [
+    "multi-agent-systems",
+    "precision-agriculture",
+    "fipa-acl",
+    "knowledge-representation",
+    "partially-observable",
+    "distributed-sensing",
+    "collision-avoidance",
+    "smart-farming"
+]
+dependencies = [
+    "pydantic>=2.7.0",
+    "rich>=13.7.0",
+    "numpy>=1.26.0",
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+krishi-cli = "krishi_karyastan.cli:main"
+krishi-web = "krishi_karyastan.ui.web:run_server"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --import-mode=importlib"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.hatch.build.targets.wheel]
+packages = ["krishi_karyastan"]
