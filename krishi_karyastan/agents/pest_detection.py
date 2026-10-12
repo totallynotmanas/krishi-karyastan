@@ -26,6 +26,7 @@ class PestDetectionAgent(BaseAgent):
         knowledge_base: SharedKnowledgeBase,
         message_bus: MessageBus,
         pest_threshold: float = 0.25,
+        sensor_radius: float = 2.0,
     ):
         super().__init__(
             agent_id=agent_id,
@@ -34,7 +35,7 @@ class PestDetectionAgent(BaseAgent):
             env=env,
             knowledge_base=knowledge_base,
             message_bus=message_bus,
-            sensor_radius=2.0,
+            sensor_radius=sensor_radius,
         )
         self.pest_threshold = pest_threshold
 

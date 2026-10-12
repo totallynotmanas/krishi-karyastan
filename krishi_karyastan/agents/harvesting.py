@@ -26,6 +26,7 @@ class HarvestingAgent(BaseAgent):
         env: FarmGrid,
         knowledge_base: SharedKnowledgeBase,
         message_bus: MessageBus,
+        sensor_radius: float = 1.2,
     ):
         super().__init__(
             agent_id=agent_id,
@@ -34,7 +35,7 @@ class HarvestingAgent(BaseAgent):
             env=env,
             knowledge_base=knowledge_base,
             message_bus=message_bus,
-            sensor_radius=1.2,
+            sensor_radius=sensor_radius,
         )
         self.harvest_bin_kg: float = 0.0
 
