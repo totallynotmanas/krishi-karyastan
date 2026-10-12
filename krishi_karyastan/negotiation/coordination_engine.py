@@ -1,10 +1,13 @@
 """Negotiation engine orchestrating bilateral fertigation coordination and conflict deconfliction."""
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 from krishi_karyastan.core.models import Coordinates, TimeSlot
-from krishi_karyastan.agents.irrigation import IrrigationAgent
-from krishi_karyastan.agents.fertilizer import FertilizerAgent
+
+if TYPE_CHECKING:
+    from krishi_karyastan.agents.irrigation import IrrigationAgent
+    from krishi_karyastan.agents.fertilizer import FertilizerAgent
+
 from krishi_karyastan.protocols.messages import ACLMessage, Performative
 from krishi_karyastan.protocols.message_bus import MessageBus
 from krishi_karyastan.protocols.schemas import (

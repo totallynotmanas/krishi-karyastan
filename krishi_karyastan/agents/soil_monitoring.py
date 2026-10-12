@@ -66,6 +66,18 @@ class SoilMonitoringAgent(BaseAgent):
                 if (current_tick - last_flagged) >= self.alert_cooldown_ticks:
                     self._flag_deficiency(coords, state, current_tick)
                     self.flagged_patches[coords] = current_tick
+            elif coords in self.flagged_patches and state.moisture_pct >= 45.0 and state.nutrients.nitrogen_ppm >= 90.0:
+                # Patch has successfully recovered!
+                del self.flagged_patches[coords]
+                self.log_action(
+                    tick=current_tick,
+                    action_name="PATCH_REMEDIATED",
+                    details={
+                        "target": coords.to_tuple(),
+                        "moisture": state.moisture_pct,
+                        "nitrogen": state.nutrients.nitrogen_ppm,
+                    },
+                )
 
     def _flag_deficiency(self, coords: Coordinates, state: SectorState, current_tick: int) -> None:
         """Formulates and broadcasts a FIPA-ACL SoilDeficiencyAlert message."""

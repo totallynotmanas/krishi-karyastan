@@ -45,13 +45,24 @@ class BaseAgent:
         self.sensor_radius = sensor_radius
         self.battery_pct = battery_pct
 
+        self.home_station: Coordinates = initial_position
         self.target_position: Optional[Coordinates] = None
         self.patrol_route: List[Coordinates] = []
         self.patrol_index: int = 0
         self.action_log: List[dict] = []
+        self._engine_ref = None
 
         # Register self on message bus
         self.message_bus.register_agent(self.agent_id)
+
+    def get_other_agent_positions(self) -> set:
+        """Returns set of coordinates currently occupied by other agents in the simulation."""
+        if self._engine_ref:
+            return {
+                a.position for a_id, a in self._engine_ref.agents.items()
+                if a_id != self.agent_id
+            }
+        return set()
 
     def send_message(
         self,
@@ -105,10 +116,17 @@ class BaseAgent:
 
     def step(self, current_tick: int) -> None:
         """Main operational cycle executed each simulation tick."""
-        if self.battery_pct <= 5.0:
-            self.status = AgentStatus.CHARGING
-            self.battery_pct = min(100.0, self.battery_pct + 10.0)
+        if self.battery_pct <= 5.0 and self.position != self.home_station:
+            # Low battery: force navigate back to home station
+            self.status = AgentStatus.NAVIGATING
+            arrived = self.navigate_towards(self.home_station)
+            if arrived:
+                self.status = AgentStatus.CHARGING
             return
+        elif self.position == self.home_station and self.battery_pct < 100.0:
+            self.battery_pct = min(100.0, round(self.battery_pct + 10.0, 2))
+            if self.battery_pct >= 95.0 and self.status == AgentStatus.CHARGING:
+                self.status = AgentStatus.IDLE
 
         percepts = self.perceive(current_tick)
         self.update_beliefs(percepts, current_tick)
@@ -116,31 +134,51 @@ class BaseAgent:
         self.act(current_tick)
 
         # Baseline battery consumption
-        self.battery_pct = max(0.0, round(self.battery_pct - 0.1, 2))
+        self.battery_pct = max(0.0, round(self.battery_pct - 0.05, 2))
 
     def navigate_towards(self, target: Coordinates) -> bool:
-        """Moves one grid step towards target coordinate. Returns True if arrived."""
+        """Moves one grid step towards target coordinate with active collision avoidance.
+        
+        Returns True if target coordinate is reached.
+        """
         if self.position == target:
+            self.status = AgentStatus.IDLE
             return True
 
-        self.status = AgentStatus.NAVIGATING
         dx = target.x - self.position.x
         dy = target.y - self.position.y
 
-        # Manhattan-style discrete movement: move along larger delta axis first
-        new_x = self.position.x
-        new_y = self.position.y
-
+        # Determine preferred candidates (Manhattan paths)
+        step_candidates: List[Coordinates] = []
         if abs(dx) >= abs(dy) and dx != 0:
-            new_x += 1 if dx > 0 else -1
+            step_candidates.append(Coordinates(x=self.position.x + (1 if dx > 0 else -1), y=self.position.y))
+            if dy != 0:
+                step_candidates.append(Coordinates(x=self.position.x, y=self.position.y + (1 if dy > 0 else -1)))
         elif dy != 0:
-            new_y += 1 if dy > 0 else -1
+            step_candidates.append(Coordinates(x=self.position.x, y=self.position.y + (1 if dy > 0 else -1)))
+            if dx != 0:
+                step_candidates.append(Coordinates(x=self.position.x + (1 if dx > 0 else -1), y=self.position.y))
 
-        next_pos = Coordinates(x=new_x, y=new_y)
-        if self.env.is_valid_coordinate(next_pos):
-            self.position = next_pos
+        # Check collisions against currently occupied cells
+        occupied = self.get_other_agent_positions()
+        moved = False
+        for candidate in step_candidates:
+            if self.env.is_valid_coordinate(candidate) and candidate not in occupied:
+                self.position = candidate
+                moved = True
+                break
 
-        return self.position == target
+        if not moved:
+            # All preferred paths currently occupied by another physical agent
+            self.status = AgentStatus.BLOCKED
+            return False
+
+        if self.position == target:
+            self.status = AgentStatus.IDLE
+            return True
+
+        self.status = AgentStatus.NAVIGATING
+        return False
 
     def navigate_patrol(self) -> None:
         """Advances along pre-assigned patrol waypoints."""

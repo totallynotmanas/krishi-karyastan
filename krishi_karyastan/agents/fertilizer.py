@@ -23,8 +23,8 @@ from krishi_karyastan.protocols.schemas import (
 class FertilizerAgent(BaseAgent):
     """Specialized actuator agent delivering precision NPK nutrients.
     
-    Coordinates with Irrigation Agent to align timing and ensure carrier water
-    does not cause root flooding or nutrient leaching.
+    Coordinates with Irrigation Agent via FIPA-ACL to align timing and ensure carrier water
+    does not cause root flooding or nutrient leaching, and vacates sectors to prevent collisions.
     """
 
     def __init__(
@@ -47,25 +47,71 @@ class FertilizerAgent(BaseAgent):
             sensor_radius=1.0,
         )
         self.nitrogen_stock_g = nitrogen_stock_g
+        self.max_nitrogen_stock_g = nitrogen_stock_g
         self.carrier_water_liters = carrier_water_liters
+        self.max_carrier_liters = carrier_water_liters
+
         self.active_schedule: Optional[CoordinatedFertigationSchedule] = None
         self.target_task_coords: Optional[Coordinates] = None
         self.target_nitrogen_g: float = 0.0
         self.target_carrier_liters: float = 0.0
+        self.is_negotiating: bool = False
+        self._handled_alerts: set = set()
 
         # Subscribe to deficiency alerts
         self.message_bus.subscribe(self.agent_id, "alerts")
 
     def deliberate(self, current_tick: int) -> None:
-        """Processes incoming confirmed schedules and agreements."""
+        """Processes incoming alerts, negotiation dialogs, and confirmed schedules."""
         messages = self.message_bus.receive(self.agent_id)
 
         for msg in messages:
-            if msg.performative == Performative.CONFIRM and isinstance(msg.content, CoordinatedFertigationSchedule):
-                self._handle_confirmed_schedule(msg.content)
-            elif msg.performative == Performative.CONFIRM and isinstance(msg.content, dict):
-                sched = CoordinatedFertigationSchedule(**msg.content)
+            # 1. Received confirmed schedule (from Coordinator or direct agreement)
+            if msg.performative == Performative.CONFIRM:
+                sched = msg.content if isinstance(msg.content, CoordinatedFertigationSchedule) else CoordinatedFertigationSchedule(**msg.content)
                 self._handle_confirmed_schedule(sched)
+                self.is_negotiating = False
+
+            # 2. Received proposal acceptance from Irrigation Agent
+            elif msg.performative == Performative.ACCEPT_PROPOSAL:
+                sched = msg.content if isinstance(msg.content, CoordinatedFertigationSchedule) else CoordinatedFertigationSchedule(**msg.content)
+                self._handle_confirmed_schedule(sched)
+                self.is_negotiating = False
+                # Send confirmation acknowledgement
+                self.send_message(
+                    receiver=msg.sender,
+                    performative=Performative.CONFIRM,
+                    content=sched,
+                    current_tick=current_tick,
+                    conversation_id=msg.conversation_id,
+                    in_reply_to=msg.message_id,
+                )
+
+            # 3. Received soil deficiency alert: initiate bilateral negotiation with Irrigation Agent
+            elif msg.performative == Performative.INFORM and "alert" in msg.conversation_id.lower():
+                if self.active_schedule is None and not self.is_negotiating:
+                    content = msg.content
+                    alert = content if isinstance(content, SoilDeficiencyAlert) else SoilDeficiencyAlert(**content)
+                    if alert.alert_id not in self._handled_alerts:
+                        self._handled_alerts.add(alert.alert_id)
+                        self._initiate_negotiation_with_irrigation(alert, current_tick)
+
+    def _initiate_negotiation_with_irrigation(self, alert: SoilDeficiencyAlert, current_tick: int) -> None:
+        """Dispatches FIPA-ACL CFP to Irrigation Agent proposing joint response."""
+        fert_proposal = self.formulate_proposal(alert, current_tick)
+        self.is_negotiating = True
+        self.status = AgentStatus.NEGOTIATING
+
+        self.send_message(
+            receiver="Irrigator_Unit_1",
+            performative=Performative.CFP,
+            content={
+                "alert": alert.model_dump(),
+                "fert_proposal": fert_proposal.model_dump(),
+            },
+            current_tick=current_tick,
+            conversation_id=f"fertigation_neg_{alert.coords.x}_{alert.coords.y}_{current_tick}",
+        )
 
     def _handle_confirmed_schedule(self, schedule: CoordinatedFertigationSchedule) -> None:
         """Adopts confirmed joint fertigation schedule."""
@@ -111,65 +157,80 @@ class FertilizerAgent(BaseAgent):
         return proposal
 
     def act(self, current_tick: int) -> None:
-        """Executes navigation to sector and nutrient dosing actuation."""
-        if not self.active_schedule:
-            self.status = AgentStatus.IDLE
-            return
+        """Executes navigation to sector, nutrient dosing, and automatic vacating to prevent collisions."""
+        # Case A: Active schedule underway
+        if self.active_schedule:
+            slot = self.active_schedule.fertilizer_slot
 
-        slot = self.active_schedule.fertilizer_slot
+            dist = self.position.manhattan_distance(self.target_task_coords)
+            # 1. Before scheduled slot: hold outside until exactly time to enter
+            if current_tick < slot.start_tick:
+                ticks_until_start = slot.start_tick - current_tick
+                if ticks_until_start > dist and dist <= 1:
+                    self.status = AgentStatus.IDLE
+                    return
+                self.navigate_towards(self.target_task_coords)
+                return
 
-        # If before scheduled slot, navigate towards sector
-        if current_tick < slot.start_tick:
-            arrived = self.navigate_towards(self.target_task_coords)
-            if arrived:
-                self.status = AgentStatus.IDLE
-            return
+            # 2. Inside scheduled slot: actuate dosing at target
+            if slot.start_tick <= current_tick <= slot.end_tick:
+                if self.position == self.target_task_coords:
+                    self.status = AgentStatus.ACTUATING
+                    dose_per_tick = self.target_nitrogen_g / max(1, slot.duration())
+                    carrier_per_tick = self.target_carrier_liters / max(1, slot.duration())
 
-        # If inside scheduled time window and at target sector
-        if slot.start_tick <= current_tick <= slot.end_tick:
-            if self.position == self.target_task_coords:
-                self.status = AgentStatus.ACTUATING
-                dose_per_tick = self.target_nitrogen_g / slot.duration()
-                carrier_per_tick = self.target_carrier_liters / slot.duration()
+                    n_to_apply = min(self.nitrogen_stock_g, dose_per_tick)
+                    c_to_apply = min(self.carrier_water_liters, carrier_per_tick)
 
-                n_to_apply = min(self.nitrogen_stock_g, dose_per_tick)
-                c_to_apply = min(self.carrier_water_liters, carrier_per_tick)
+                    nutrients, new_moist, is_oversat = self.env.apply_nutrients(
+                        coords=self.position,
+                        nitrogen_g=n_to_apply,
+                        phosphorus_g=n_to_apply * 0.3,
+                        potassium_g=n_to_apply * 0.4,
+                        carrier_water_liters=c_to_apply,
+                        agent_id=self.agent_id,
+                    )
 
-                nutrients, new_moist, is_oversat = self.env.apply_nutrients(
-                    coords=self.position,
-                    nitrogen_g=n_to_apply,
-                    phosphorus_g=n_to_apply * 0.3,
-                    potassium_g=n_to_apply * 0.4,
-                    carrier_water_liters=c_to_apply,
-                    agent_id=self.agent_id,
-                )
+                    self.nitrogen_stock_g = max(0.0, round(self.nitrogen_stock_g - n_to_apply, 2))
+                    self.carrier_water_liters = max(0.0, round(self.carrier_water_liters - c_to_apply, 2))
 
-                self.nitrogen_stock_g = max(0.0, round(self.nitrogen_stock_g - n_to_apply, 2))
-                self.carrier_water_liters = max(0.0, round(self.carrier_water_liters - c_to_apply, 2))
+                    self.log_action(
+                        tick=current_tick,
+                        action_name="APPLY_FERTILIZER",
+                        details={
+                            "n_applied": round(n_to_apply, 2),
+                            "carrier_applied": round(c_to_apply, 2),
+                            "new_moisture": new_moist,
+                            "oversaturated": is_oversat,
+                        },
+                    )
+                else:
+                    self.navigate_towards(self.target_task_coords)
+                return
 
+            # 3. Scheduled slot ended: task completed, immediately vacate sector
+            if current_tick > slot.end_tick:
                 self.log_action(
                     tick=current_tick,
-                    action_name="APPLY_FERTILIZER",
-                    details={
-                        "n_applied": round(n_to_apply, 2),
-                        "carrier_applied": round(c_to_apply, 2),
-                        "new_moisture": new_moist,
-                        "oversaturated": is_oversat,
-                    },
+                    action_name="FERTILIZER_TASK_COMPLETED",
+                    details={"target": self.target_task_coords.to_tuple()},
                 )
-            else:
-                self.navigate_towards(self.target_task_coords)
-            return
+                self.active_schedule = None
+                self.target_task_coords = None
+                self.target_nitrogen_g = 0.0
+                self.target_carrier_liters = 0.0
+                # Begin vacating back towards home station
+                self.navigate_towards(self.home_station)
+                return
 
-        # Past scheduled slot
-        if current_tick > slot.end_tick:
-            self.log_action(
-                tick=current_tick,
-                action_name="FERTILIZER_TASK_COMPLETED",
-                details={"target": self.target_task_coords.to_tuple()},
-            )
-            self.active_schedule = None
-            self.target_task_coords = None
-            self.target_nitrogen_g = 0.0
-            self.target_carrier_liters = 0.0
-            self.status = AgentStatus.IDLE
+        # Case B: No active schedule - return to home station to resupply and charge
+        if self.position != self.home_station:
+            self.navigate_towards(self.home_station)
+        else:
+            # At home station: resupply nutrients & recharge
+            if self.nitrogen_stock_g < self.max_nitrogen_stock_g or self.battery_pct < 95.0:
+                self.status = AgentStatus.CHARGING
+                self.nitrogen_stock_g = min(self.max_nitrogen_stock_g, round(self.nitrogen_stock_g + 50.0, 2))
+                self.carrier_water_liters = min(self.max_carrier_liters, round(self.carrier_water_liters + 10.0, 2))
+            else:
+                self.status = AgentStatus.IDLE

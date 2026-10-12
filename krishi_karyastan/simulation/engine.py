@@ -37,6 +37,7 @@ class SimulationEngine:
     def add_agent(self, agent: BaseAgent) -> None:
         """Registers an agent into the simulation."""
         self.agents[agent.agent_id] = agent
+        agent._engine_ref = self
 
     def step(self, weather: Optional[WeatherState] = None) -> dict:
         """Executes a single discrete simulation tick across the entire farm."""
@@ -52,54 +53,15 @@ class SimulationEngine:
         for agent in self.agents.values():
             agent.step(self.current_tick)
 
-        # 4. Check for newly flagged SoilDeficiencyAlerts on the message bus
-        self._process_active_alerts()
+        # 4. Record any schedules agreed during decentralized agent negotiation
+        for agent in self.agents.values():
+            if hasattr(agent, "active_schedule") and agent.active_schedule:
+                if agent.active_schedule not in self.negotiated_schedules:
+                    self.negotiated_schedules.append(agent.active_schedule)
 
         # 5. Capture tick telemetry
         telemetry = self.get_telemetry()
         return telemetry
-
-    def _process_active_alerts(self) -> None:
-        """Detects pending deficiency alerts and orchestrates multi-agent negotiation."""
-        # Find irrigation and fertilizer agents
-        ia = next((a for a in self.agents.values() if isinstance(a, IrrigationAgent)), None)
-        fa = next((a for a in self.agents.values() if isinstance(a, FertilizerAgent)), None)
-
-        if not ia or not fa:
-            return
-
-        # Check alerts from message bus history
-        alerts = self.message_bus.get_alerts()
-        for alert_msg in alerts:
-            alert_id = alert_msg.conversation_id
-            if alert_id in self._handled_alerts:
-                continue
-
-            content = alert_msg.content
-            if isinstance(content, SoilDeficiencyAlert):
-                alert_data = content
-            elif isinstance(content, dict):
-                alert_data = SoilDeficiencyAlert(**content)
-            else:
-                continue
-
-            # Check if neither agent is currently locked on an active schedule
-            if ia.active_schedule is None and fa.active_schedule is None:
-                schedule = self.coordinator.negotiate_response(
-                    alert=alert_data,
-                    fertilizer_agent=fa,
-                    irrigation_agent=ia,
-                    current_tick=self.current_tick,
-                )
-                self.negotiated_schedules.append(schedule)
-                self._handled_alerts.add(alert_id)
-                self.event_log.append({
-                    "tick": self.current_tick,
-                    "event": "NEGOTIATION_COMPLETED",
-                    "target": alert_data.coords.to_tuple(),
-                    "schedule_id": schedule.schedule_id,
-                    "notes": schedule.negotiation_notes,
-                })
 
     def run(self, ticks: int) -> List[dict]:
         """Runs the simulation for a predetermined number of ticks."""
@@ -121,6 +83,20 @@ class SimulationEngine:
             for a in self.agents.values()
         }
 
+        # Check for any physical hardware collisions (two agents sharing coordinates)
+        positions_seen = {}
+        collision_events = []
+        for a_id, a in self.agents.items():
+            pos = a.position.to_tuple()
+            if pos in positions_seen:
+                collision_events.append({
+                    "agent1": a_id,
+                    "agent2": positions_seen[pos],
+                    "coords": pos,
+                })
+            else:
+                positions_seen[pos] = a_id
+
         sector_heatmaps = []
         for y in range(self.env.height):
             row = []
@@ -140,6 +116,8 @@ class SimulationEngine:
             "tick": self.current_tick,
             "agents": agent_positions,
             "sectors": sector_heatmaps,
+            "collision_count": len(collision_events),
+            "collision_events": collision_events,
             "kb_stats": self.knowledge_base.get_summary_statistics(),
             "recent_messages": [
                 {

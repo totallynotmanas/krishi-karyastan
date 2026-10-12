@@ -81,6 +81,8 @@ def build_case_study_scenario(
         knowledge_base=kb,
         message_bus=bus,
         water_tank_liters=150.0,
+        saturation_governor=saturation_gov,
+        collision_table=collision_table,
     )
 
     # 3. Fertilizer Agent

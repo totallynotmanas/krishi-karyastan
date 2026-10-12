@@ -85,7 +85,8 @@ def render_agent_status_table(agents) -> Table:
         "SENSING": "blue",
         "ACTUATING": "bold green",
         "NEGOTIATING": "bold yellow",
-        "CHARGING": "bold red",
+        "BLOCKED": "bold red",
+        "CHARGING": "yellow",
     }
 
     for a in agents.values():

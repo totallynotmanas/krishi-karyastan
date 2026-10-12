@@ -159,9 +159,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-weight: 600;
     }
 
+    .collision-badge {
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .collision-safe {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+    .collision-danger {
+      background: rgba(239, 68, 68, 0.25);
+      border: 1px solid rgba(239, 68, 68, 0.6);
+      color: #f87171;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+
     .main-grid {
       display: grid;
-      grid-template-columns: 1fr 380px;
+      grid-template-columns: 1fr 390px;
       gap: 24px;
     }
 
@@ -263,13 +289,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 2px;
     }
     .marker-badge {
-      width: 18px;
-      height: 18px;
+      width: 20px;
+      height: 20px;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.7rem;
+      font-size: 0.75rem;
       border: 1px solid white;
       box-shadow: 0 2px 6px rgba(0,0,0,0.5);
     }
@@ -289,13 +315,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .agent-info-left { display: flex; align-items: center; gap: 10px; }
     .agent-avatar {
-      width: 32px;
-      height: 32px;
+      width: 34px;
+      height: 34px;
       border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.1rem;
+      font-size: 1.15rem;
     }
     .status-pill {
       font-size: 0.72rem;
@@ -328,7 +354,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .msg-perf {
       font-weight: 700;
-      color: #fbbf24;
     }
 
     .gauge-container {
@@ -365,10 +390,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="control-bar">
       <div class="tick-badge" id="tickDisplay">Tick: 0</div>
+      <div class="collision-badge collision-safe" id="collisionBadge">✓ 0 Collisions</div>
       <button class="btn btn-secondary" id="stepBtn" onclick="stepSim(1)">▶ Step</button>
       <button class="btn btn-primary" id="playBtn" onclick="togglePlay()">Auto Play</button>
       <button class="btn btn-secondary" onclick="resetSim()">↺ Reset</button>
-      <button class="btn btn-danger" onclick="triggerPatchDeficit()">⚡ Induce Anomaly (3,4)</button>
+      <button class="btn btn-danger" onclick="triggerPatchDeficit(3, 4)">⚡ Induce Anomaly (3,4)</button>
     </div>
   </header>
 
@@ -377,7 +403,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div style="display: flex; flex-direction: column; gap: 24px;">
       <div class="card">
         <div class="card-header">
-          <h2>🌾 Spatial Farm Sectors (Partial Observability Grid)</h2>
+          <h2>🌾 Spatial Farm Sectors (Click any sector to induce deficit)</h2>
           <div class="view-toggle">
             <button class="view-btn active" id="btnMoist" onclick="setView('moisture')">Moisture %</button>
             <button class="view-btn" id="btnNitro" onclick="setView('nitrogen')">Nitrogen (ppm)</button>
@@ -388,8 +414,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="grid-board" id="gridBoard"></div>
           <div style="font-size: 0.82rem; color: var(--text-muted); display: flex; gap: 20px;">
             <span>🔍 <b>SMA</b>: Soil Monitor</span>
-            <span>💧 <b>IRR</b>: Irrigation Agent</span>
-            <span>🌱 <b>FRT</b>: Fertilizer Agent</span>
+            <span>💧 <b>IRR</b>: Irrigation Agent (Base: 0,0)</span>
+            <span>🌱 <b>FRT</b>: Fertilizer Agent (Base: 7,7)</span>
             <span>🐛 <b>PST</b>: Pest Scout</span>
             <span>🌾 <b>HAR</b>: Harvester</span>
           </div>
@@ -402,14 +428,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="gauge-container">
           <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-            <span>Target Sector (3, 4) Joint Moisture: <b id="jointMoistVal">--</b></span>
+            <span>Target Sector (3, 4) Current Moisture: <b id="jointMoistVal">--</b></span>
             <span>Field Capacity Limit: <b>65.0%</b></span>
           </div>
           <div class="gauge-bar-bg">
             <div class="gauge-bar-fill" id="moistGauge"></div>
           </div>
           <p id="governorStatusText" style="font-size: 0.8rem; color: #34d399;">
-            ✓ Safe Non-Saturated: Joint water addition is within safe agronomic boundaries. Zero hardware collisions.
+            ✓ Safe Non-Saturated: Carrier fluid deducted from net irrigation. 4D Deconfliction guarantees zero physical collisions.
           </p>
         </div>
       </div>
@@ -486,11 +512,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       renderDashboard(data);
     }
 
-    async function triggerPatchDeficit() {
+    async function triggerPatchDeficit(x = 3, y = 4) {
       await fetch('/api/trigger_anomaly', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({x: 3, y: 4, moisture: 16.0, nitrogen: 35.0})
+        body: JSON.stringify({x, y, moisture: 16.0, nitrogen: 35.0})
       });
       fetchState();
     }
@@ -501,7 +527,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (isPlaying) {
         playBtn.innerText = '⏸ Pause';
         playBtn.classList.replace('btn-primary', 'btn-secondary');
-        playInterval = setInterval(() => stepSim(1), 500);
+        playInterval = setInterval(() => stepSim(1), 400);
       } else {
         playBtn.innerText = 'Auto Play';
         playBtn.classList.replace('btn-secondary', 'btn-primary');
@@ -511,6 +537,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function renderDashboard(data) {
       document.getElementById('tickDisplay').innerText = `Tick: ${data.tick}`;
+
+      // Collision badge
+      const cBadge = document.getElementById('collisionBadge');
+      if (data.collision_count === 0) {
+        cBadge.className = 'collision-badge collision-safe';
+        cBadge.innerText = '✓ 0 Collisions (Deconflicted)';
+      } else {
+        cBadge.className = 'collision-badge collision-danger';
+        cBadge.innerText = `⚠ ${data.collision_count} Hardware Collisions!`;
+      }
 
       // Build agent position map
       const agentPosMap = {};
@@ -529,6 +565,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const sector = data.sectors[y][x];
           const cell = document.createElement('div');
           cell.className = 'sector-cell';
+          cell.title = `Click to induce deficit at (${x}, ${y})`;
+          cell.onclick = () => triggerPatchDeficit(x, y);
 
           let valText = '';
           let bgColor = '';
@@ -607,9 +645,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         for (const m of [...data.recent_messages].reverse()) {
           const b = document.createElement('div');
           b.className = 'msg-bubble';
+          const pColor = getPerfColor(m.performative);
+          b.style.borderLeftColor = pColor;
           b.innerHTML = `
             <div class="msg-top">
-              <span class="msg-perf">${m.performative}</span>
+              <span class="msg-perf" style="color: ${pColor};">${m.performative}</span>
               <span style="color: var(--text-muted);">T:${m.tick}</span>
             </div>
             <div><span style="color: var(--accent-cyan);">${m.sender}</span> ➔ <span style="color: var(--accent-purple);">${m.receiver}</span></div>
@@ -627,12 +667,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function getPerfColor(perf) {
+      switch(perf) {
+        case 'INFORM': return '#38bdf8';
+        case 'CFP': return '#a855f7';
+        case 'PROPOSE': return '#f59e0b';
+        case 'ACCEPT_PROPOSAL': return '#10b981';
+        case 'CONFIRM': return '#34d399';
+        default: return '#94a3b8';
+      }
+    }
+
     function getStatusColor(status) {
       switch(status) {
         case 'ACTUATING': return '#10b981';
         case 'NAVIGATING': return '#38bdf8';
         case 'SENSING': return '#818cf8';
         case 'NEGOTIATING': return '#f59e0b';
+        case 'BLOCKED': return '#ef4444';
+        case 'CHARGING': return '#eab308';
         default: return '#94a3b8';
       }
     }
